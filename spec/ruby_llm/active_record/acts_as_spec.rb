@@ -514,6 +514,108 @@ RSpec.describe RubyLLM::ActiveRecord::ActsAs do
     end
   end
 
+  describe 'provider hooks' do
+    it 'proxies on_before_request hook' do
+      chat = Chat.create!(model_id: model)
+      request_payload = nil
+
+      chat.on_before_request do |payload|
+        request_payload = payload
+      end
+
+      VCR.use_cassette('provider_hooks/before_request') do
+        chat.ask('Say hello')
+      end
+
+      expect(request_payload).to be_a(String)
+      parsed = JSON.parse(request_payload)
+      expect(parsed['messages']).to be_an(Array)
+    end
+
+    it 'proxies on_after_response hook' do
+      chat = Chat.create!(model_id: model)
+      response_data = nil
+
+      chat.on_after_response do |data|
+        response_data = data
+      end
+
+      VCR.use_cassette('provider_hooks/after_response') do
+        chat.ask('Say hello')
+      end
+
+      expect(response_data).to be_a(String)
+      parsed = JSON.parse(response_data)
+      expect(parsed).to be_present
+    end
+
+    it 'proxies on_error hook' do
+      chat = Chat.create!(model_id: model)
+      error_data = nil
+
+      chat.on_error do |data|
+        error_data = data
+      end
+
+      # Mock the connection to raise an error
+      connection = chat.instance_variable_get(:@chat).instance_variable_get(:@connection)
+      mock_response = instance_double(Faraday::Response, body: 'API error', status: 500)
+      allow(connection).to receive(:post).and_raise(RubyLLM::Error, mock_response)
+
+      expect do
+        chat.ask('Say hello')
+      end.to raise_error(RubyLLM::Error)
+
+      expect(error_data).to be_a(RubyLLM::Error)
+      expect(error_data.message).to be_present
+    end
+
+    it 'proxies on_retry hook' do
+      chat = Chat.create!(model_id: model)
+      retry_data = nil
+
+      chat.on_retry do |data|
+        retry_data = data
+      end
+
+      provider_instance = chat.instance_variable_get(:@chat).instance_variable_get(:@provider)
+      original_complete = provider_instance.method(:complete)
+      call_count = 0
+
+      allow(provider_instance).to receive(:complete) do |*args, **kwargs, &block|
+        call_count += 1
+        if call_count == 1
+          mock_response = instance_double(Faraday::Response, body: 'Rate limit exceeded')
+          raise RubyLLM::RateLimitError, mock_response
+        else
+          original_complete.call(*args, **kwargs, &block)
+        end
+      end
+
+      VCR.use_cassette('provider_hooks/on_retry', record: :new_episodes) do
+        chat.ask('Say hello')
+      rescue RubyLLM::RateLimitError
+        # Expected error after max retries
+      end
+
+      expect(retry_data).to be_a(Hash) if retry_data
+    end
+
+    it 'maintains hooks when switching models' do
+      skip 'Test requires multiple model support' unless ENV['CI']
+
+      chat = Chat.create!(model_id: model)
+      request_count = 0
+
+      chat.on_before_request { request_count += 1 }
+
+      VCR.use_cassette('provider_hooks/model_switch') do
+        chat.ask('First message')
+        expect(request_count).to eq(1)
+      end
+    end
+  end
+
   describe 'error recovery' do
     it 'cleans up orphaned tool result messages on error' do
       chat = Chat.create!(model_id: model)

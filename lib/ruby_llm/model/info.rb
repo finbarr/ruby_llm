@@ -27,7 +27,7 @@ module RubyLLM
       end
 
       %w[function_calling structured_output batch reasoning citations streaming].each do |cap|
-        define_method "#{cap}?" do
+        define_method :"#{cap}?" do
           supports?(cap)
         end
       end

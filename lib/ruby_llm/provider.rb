@@ -5,12 +5,38 @@ module RubyLLM
   class Provider
     include Streaming
 
-    attr_reader :config, :connection
+    attr_reader :config, :connection, :hooks
 
     def initialize(config)
       @config = config
+      @hooks = {
+        before_request: nil,
+        after_response: nil,
+        on_error: nil,
+        on_retry: nil
+      }
       ensure_configured!
       @connection = Connection.new(self, @config)
+    end
+
+    def on_before_request(&block)
+      @hooks[:before_request] = block
+      self
+    end
+
+    def on_after_response(&block)
+      @hooks[:after_response] = block
+      self
+    end
+
+    def on_error(&block)
+      @hooks[:on_error] = block
+      self
+    end
+
+    def on_retry(&block)
+      @hooks[:on_retry] = block
+      self
     end
 
     def api_base
@@ -52,10 +78,24 @@ module RubyLLM
         )
       )
 
-      if block_given?
-        stream_response @connection, payload, headers, &
-      else
-        sync_response @connection, payload, headers
+      # Convert payload to raw JSON for the before_request hook
+      raw_request_json = JSON.generate(payload, ascii_only: false)
+
+      # Call before_request hook with ONLY raw JSON
+      @hooks[:before_request]&.call(raw_request_json)
+
+      begin
+        response = if block_given?
+                     stream_response @connection, payload, headers, &
+                   else
+                     sync_response @connection, payload, headers
+                   end
+
+        trigger_after_response_hook(response)
+        response
+      rescue StandardError => e
+        trigger_error_hook(e)
+        raise
       end
     end
 
@@ -209,7 +249,63 @@ module RubyLLM
       response = connection.post completion_url, payload do |req|
         req.headers = additional_headers.merge(req.headers) unless additional_headers.empty?
       end
-      parse_completion_response response
+      parsed_message = parse_completion_response response
+      # Attach raw request and response to the message for hooks
+      if response.respond_to?(:raw_request)
+        parsed_message.define_singleton_method(:raw_request) do
+          response.raw_request
+        end
+      end
+      if response.respond_to?(:raw_response)
+        parsed_message.define_singleton_method(:raw_response) do
+          response.raw_response
+        end
+      end
+      parsed_message
+    end
+
+    def trigger_after_response_hook(message)
+      return unless @hooks[:after_response]
+
+      # Get raw response JSON from the message object if available
+      raw_response_json = if message.respond_to?(:raw_response)
+                            message.raw_response
+                          elsif message.respond_to?(:raw) && message.raw&.body
+                            # For Anthropic, the raw is the Faraday response, body is already parsed
+                            JSON.generate(message.raw.body, ascii_only: false)
+                          end
+
+      # Call after_response hook with ONLY raw JSON
+      @hooks[:after_response].call(raw_response_json)
+    end
+
+    def trigger_error_hook(error)
+      return unless @hooks[:on_error]
+
+      @hooks[:on_error].call(error)
+    end
+
+    def tool_to_hash(tool)
+      {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters.transform_values do |p|
+          { type: p.type, description: p.description, required: p.required }
+        end
+      }
+    end
+
+    def message_to_hash(message)
+      {
+        role: message.role,
+        content: message.content,
+        tool_calls: message.tool_calls&.transform_values do |tc|
+          { id: tc.id, name: tc.name, arguments: tc.arguments }
+        end,
+        input_tokens: message.input_tokens,
+        output_tokens: message.output_tokens,
+        model_id: message.model_id
+      }
     end
   end
 end

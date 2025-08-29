@@ -98,7 +98,7 @@ module RubyLLM
           # @api private
           def initialize(options)
             options.each_pair do |attr_name, attr_value|
-              send("#{attr_name}=", attr_value)
+              send(:"#{attr_name}=", attr_value)
             end
           end
 

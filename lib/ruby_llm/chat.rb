@@ -14,8 +14,6 @@ module RubyLLM
 
       @context = context
       @config = context&.config || RubyLLM.config
-      model_id = model || @config.default_model
-      with_model(model_id, provider: provider, assume_exists: assume_model_exists)
       @temperature = nil
       @messages = []
       @tools = {}
@@ -26,8 +24,15 @@ module RubyLLM
         new_message: nil,
         end_message: nil,
         tool_call: nil,
-        tool_result: nil
+        tool_result: nil,
+        before_request: nil,
+        after_response: nil,
+        on_error: nil,
+        on_retry: nil
       }
+
+      model_id = model || @config.default_model
+      with_model(model_id, provider: provider, assume_exists: assume_model_exists)
     end
 
     def ask(message = nil, with: nil, &)
@@ -59,6 +64,13 @@ module RubyLLM
     def with_model(model_id, provider: nil, assume_exists: false)
       @model, @provider = Models.resolve(model_id, provider:, assume_exists:, config: @config)
       @connection = @provider.connection
+
+      # Re-attach hooks to new provider
+      @provider.on_before_request(&@on[:before_request]) if @on[:before_request]
+      @provider.on_after_response(&@on[:after_response]) if @on[:after_response]
+      @provider.on_error(&@on[:on_error]) if @on[:on_error]
+      @provider.on_retry(&@on[:on_retry]) if @on[:on_retry]
+
       self
     end
 
@@ -114,6 +126,30 @@ module RubyLLM
 
     def on_tool_result(&block)
       @on[:tool_result] = block
+      self
+    end
+
+    def on_before_request(&block)
+      @on[:before_request] = block
+      @provider&.on_before_request(&block)
+      self
+    end
+
+    def on_after_response(&block)
+      @on[:after_response] = block
+      @provider&.on_after_response(&block)
+      self
+    end
+
+    def on_error(&block)
+      @on[:on_error] = block
+      @provider&.on_error(&block)
+      self
+    end
+
+    def on_retry(&block)
+      @on[:on_retry] = block
+      @provider&.on_retry(&block)
       self
     end
 

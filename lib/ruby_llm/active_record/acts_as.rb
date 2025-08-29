@@ -179,6 +179,26 @@ module RubyLLM
         self
       end
 
+      def on_before_request(...)
+        to_llm.on_before_request(...)
+        self
+      end
+
+      def on_after_response(...)
+        to_llm.on_after_response(...)
+        self
+      end
+
+      def on_error(...)
+        to_llm.on_error(...)
+        self
+      end
+
+      def on_retry(...)
+        to_llm.on_retry(...)
+        self
+      end
+
       def create_user_message(content, with: nil)
         message_record = messages.create!(role: :user, content: content)
         persist_content(message_record, with) if with.present?

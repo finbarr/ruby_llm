@@ -35,10 +35,22 @@ module RubyLLM
 
     def post(url, payload, &)
       body = payload.is_a?(Hash) ? JSON.generate(payload, ascii_only: false) : payload
-      @connection.post url, body do |req|
+
+      # Store the raw request body for hooks
+      raw_request = body
+
+      response = @connection.post url, body do |req|
         req.headers.merge! @provider.headers if @provider.respond_to?(:headers)
         yield req if block_given?
       end
+
+      # Attach raw request and response to the response object
+      response.define_singleton_method(:raw_request) { raw_request }
+      response.define_singleton_method(:raw_response) do
+        response.body.is_a?(String) ? response.body : JSON.generate(response.body)
+      end
+
+      response
     end
 
     def get(url, &)
@@ -74,7 +86,19 @@ module RubyLLM
         interval_randomness: @config.retry_interval_randomness,
         backoff_factor: @config.retry_backoff_factor,
         exceptions: retry_exceptions,
-        retry_statuses: [429, 500, 502, 503, 504, 529]
+        retry_statuses: [429, 500, 502, 503, 504, 529],
+        retry_block: proc do |env, options, retries, exception|
+          # Trigger retry hook if available
+          @provider.hooks[:on_retry]&.call({
+                                             provider: @provider.class.name,
+                                             url: env.url.to_s,
+                                             method: env.method,
+                                             attempt: retries + 1,
+                                             max_retries: options.max,
+                                             exception: exception&.message,
+                                             status: env.status
+                                           })
+        end
       }
     end
 
