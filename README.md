@@ -94,6 +94,19 @@ end
 response = chat.with_schema(ProductSchema).ask "Analyze this product", with: "product.txt"
 ```
 
+```ruby
+# Debug raw API requests and responses
+chat.on_before_request do |raw_json|
+  puts "Sending: #{raw_json}"
+end
+
+chat.on_after_response do |raw_json|
+  puts "Received: #{raw_json}"
+end
+
+chat.ask "Hello!"
+```
+
 ## Features
 
 * **Chat:** Conversational AI with `RubyLLM.chat`
@@ -107,6 +120,7 @@ response = chat.with_schema(ProductSchema).ask "Analyze this product", with: "pr
 * **Streaming:** Real-time responses with blocks
 * **Rails:** ActiveRecord integration with `acts_as_chat`
 * **Async:** Fiber-based concurrency
+* **Hooks:** Inspect raw API requests/responses for debugging
 * **Model registry:** 500+ models with capability detection and pricing
 * **Providers:** OpenAI, Anthropic, Gemini, Bedrock, DeepSeek, Mistral, Ollama, OpenRouter, Perplexity, GPUStack, and any OpenAI-compatible API
 
